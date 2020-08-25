@@ -1232,7 +1232,7 @@ func (s *Server) systemSubscribe(subject string, internalOnly bool, cb msgHandle
 	}
 
 	// Now create the subscription
-	return c.processSub([]byte(subject), nil, []byte(sid), cb, 0, internalOnly)
+	return c.processSub(c.createSub([]byte(subject), nil, []byte(sid), cb), internalOnly)
 }
 
 func (s *Server) sysUnsubscribe(sub *subscription) {

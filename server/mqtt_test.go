@@ -1684,6 +1684,13 @@ func TestMQTTSubQoS(t *testing.T) {
 	testMQTTSendPubAck(t, mc, pi2)
 }
 
+func getSubQoS(sub *subscription) int {
+	if sub.mqtt != nil {
+		return int(sub.mqtt.qos)
+	}
+	return -1
+}
+
 func TestMQTTSubDups(t *testing.T) {
 	o := testMQTTDefaultOptions()
 	s := testMQTTRunServer(t, o)
@@ -1728,12 +1735,12 @@ func TestMQTTSubDups(t *testing.T) {
 		c.mu.Lock()
 		if c.opts.Username == "sub" {
 			subc = c
-			if sub := c.subs["foo"]; sub == nil || sub.qos != 0 {
-				err = fmt.Errorf("subscription foo QoS should be 0, got %v", sub.qos)
+			if sub := c.subs["foo"]; sub == nil || getSubQoS(sub) != 0 {
+				err = fmt.Errorf("subscription foo QoS should be 0, got %v", getSubQoS(sub))
 			}
 			if err == nil {
-				if sub := c.subs["bar"]; sub == nil || sub.qos != 1 {
-					err = fmt.Errorf("subscription bar QoS should be 1, got %v", sub.qos)
+				if sub := c.subs["bar"]; sub == nil || getSubQoS(sub) != 1 {
+					err = fmt.Errorf("subscription bar QoS should be 1, got %v", getSubQoS(sub))
 				}
 			}
 		}
@@ -1757,7 +1764,7 @@ func TestMQTTSubDups(t *testing.T) {
 	testMQTTCheckPubMsg(t, mc, r, "foo", 0, []byte("msg"))
 	testMQTTCheckPubMsg(t, mc, r, "foo", 0, []byte("msg"))
 
-	checkWCSub := func(expectedQoS byte) {
+	checkWCSub := func(expectedQoS int) {
 		t.Helper()
 
 		subc.mu.Lock()
@@ -1770,19 +1777,19 @@ func TestMQTTSubDups(t *testing.T) {
 		}
 		if sub, ok := subc.subs["foo.>"]; !ok {
 			t.Fatal("Expected sub foo.> to be present but was not")
-		} else if sub.qos != expectedQoS {
-			t.Fatalf("Expected sub foo.> QoS to be %v, got %v", expectedQoS, sub.qos)
+		} else if getSubQoS(sub) != expectedQoS {
+			t.Fatalf("Expected sub foo.> QoS to be %v, got %v", expectedQoS, getSubQoS(sub))
 		}
 		if sub, ok := subc.subs["foo fwc"]; !ok {
 			t.Fatal("Expected sub foo fwc to be present but was not")
-		} else if sub.qos != expectedQoS {
-			t.Fatalf("Expected sub foo fwc QoS to be %v, got %v", expectedQoS, sub.qos)
+		} else if getSubQoS(sub) != expectedQoS {
+			t.Fatalf("Expected sub foo fwc QoS to be %v, got %v", expectedQoS, getSubQoS(sub))
 		}
 		// Make sure existing sub on "foo" qos was not changed.
 		if sub, ok := subc.subs["foo"]; !ok {
 			t.Fatal("Expected sub foo to be present but was not")
-		} else if sub.qos != 0 {
-			t.Fatalf("Expected sub foo QoS to be 0, got %v", sub.qos)
+		} else if getSubQoS(sub) != 0 {
+			t.Fatalf("Expected sub foo QoS to be 0, got %v", getSubQoS(sub))
 		}
 	}
 	checkWCSub(1)

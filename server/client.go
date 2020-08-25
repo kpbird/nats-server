@@ -410,7 +410,7 @@ type subscription struct {
 	max     int64
 	qw      int32
 	closed  int32
-	qos     byte
+	mqtt    *mqttSub
 }
 
 // Indicate that this subscription is closed.
@@ -2120,33 +2120,30 @@ func (c *client) parseSub(argo []byte, noForward bool) error {
 	arg := make([]byte, len(argo))
 	copy(arg, argo)
 	args := splitArg(arg)
-	var (
-		subject []byte
-		queue   []byte
-		sid     []byte
-	)
+	sub := &subscription{client: c}
 	switch len(args) {
 	case 2:
-		subject = args[0]
-		queue = nil
-		sid = args[1]
+		sub.subject = args[0]
+		sub.queue = nil
+		sub.sid = args[1]
 	case 3:
-		subject = args[0]
-		queue = args[1]
-		sid = args[2]
+		sub.subject = args[0]
+		sub.queue = args[1]
+		sub.sid = args[2]
 	default:
 		return fmt.Errorf("processSub Parse Error: '%s'", arg)
 	}
 	// If there was an error, it has been sent to the client. We don't return an
 	// error here to not close the connection as a parsing error.
-	c.processSub(subject, queue, sid, nil, 0, noForward)
+	c.processSub(sub, noForward)
 	return nil
 }
 
-func (c *client) processSub(subject, queue, bsid []byte, cb msgHandler, qos byte, noForward bool) (*subscription, error) {
+func (c *client) createSub(subject, queue, sid []byte, cb msgHandler) *subscription {
+	return &subscription{client: c, subject: subject, queue: queue, sid: sid, icb: cb}
+}
 
-	// Create the subscription
-	sub := &subscription{client: c, subject: subject, queue: queue, sid: bsid, icb: cb, qos: qos}
+func (c *client) processSub(sub *subscription, noForward bool) (*subscription, error) {
 
 	c.mu.Lock()
 
@@ -2158,7 +2155,7 @@ func (c *client) processSub(subject, queue, bsid []byte, cb msgHandler, qos byte
 	acc := c.acc
 	srv := c.srv
 
-	sid := string(bsid)
+	sid := string(sub.sid)
 
 	// This check does not apply to SYSTEM or JETSTREAM or ACCOUNT clients (because they don't have a `nc`...)
 	if c.isClosed() && (kind != SYSTEM && kind != JETSTREAM && kind != ACCOUNT) {
@@ -2210,8 +2207,9 @@ func (c *client) processSub(subject, queue, bsid []byte, cb msgHandler, qos byte
 				updateGWs = c.srv.gateway.enabled
 			}
 		}
-	} else {
-		es.qos = qos
+	} else if es.mqtt != nil && sub.mqtt != nil {
+		es.mqtt.prm = sub.mqtt.prm
+		es.mqtt.qos = sub.mqtt.qos
 	}
 	// Unlocked from here onward
 	c.mu.Unlock()
