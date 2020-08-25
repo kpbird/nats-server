@@ -102,6 +102,17 @@ type srvMQTT struct {
 	authOverride bool
 	users        map[string]*User
 	retained     mqttRetained
+	sessmgr      mqttSessionManager
+}
+
+type mqttSessionManager struct {
+	mu       sync.RWMutex
+	sessions map[string]*mqttSession
+}
+
+type mqttSession struct {
+	c     *client
+	clean bool
 }
 
 type mqttRetained struct {
@@ -197,6 +208,7 @@ func (s *Server) startMQTT() {
 		s.mu.Unlock()
 		return
 	}
+	s.mqtt.sessmgr.sessions = make(map[string]*mqttSession)
 	hl, err = net.Listen("tcp", hp)
 	if err != nil {
 		s.mu.Unlock()
@@ -426,6 +438,37 @@ func (c *client) mqttParse(buf []byte) error {
 	return err
 }
 
+// Update the session (possibly remove it) of this disconnected client.
+func (s *Server) mqttHandleClosedClient(c *client) {
+	c.mu.Lock()
+	cp := c.mqtt.cp
+	c.mu.Unlock()
+	if cp == nil {
+		return
+	}
+	sm := &s.mqtt.sessmgr
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	es, ok := sm.sessions[cp.clientID]
+	if !ok {
+		return
+	}
+	// If registered client is not this client, it may have been already
+	// replaced, so ignore.
+	if es.c != c {
+		return
+	}
+	// It the session was created with "clean session" flag, we cleanup
+	// when the client disconnects.
+	if es.clean {
+		s.mqttClearSession(es)
+		delete(sm.sessions, cp.clientID)
+	} else {
+		// Clear the client from the session, but session stays.
+		es.c = nil
+	}
+}
+
 //////////////////////////////////////////////////////////////////////////////
 //
 // CONNECT protocol related functions
@@ -623,20 +666,73 @@ func (s *Server) mqttProcessConnect(c *client, cp *mqttConnectProto) (byte, time
 	if !s.isClientAuthorized(c) {
 		return mqttConnAckRCNotAuthorized, 0, ErrAuthentication
 	}
+	sm := &s.mqtt.sessmgr
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	// Is the client requesting a clean session or not.
+	cleanSess := cp.flags&mqttConnFlagCleanSession != 0
+	// Session present? Assume false, will be set to true only when applicable.
+	sessp := false
+	// Do we have an existing session for this client ID
+	if es, ok := sm.sessions[cp.clientID]; ok {
+		// Clear the session if client wants a clean session.
+		// Also, Spec [MQTT-3.2.2-1]: don't report session present
+		if cleanSess || es.clean {
+			// Spec [MQTT-3.1.2-6]: If CleanSession is set to 1, the Client and
+			// Server MUST discard any previous Session and start a new one.
+			// This Session lasts as long as the Network Connection. State data
+			// associated with this Session MUST NOT be reused in any subsequent
+			// Session.
+			s.mqttClearSession(es)
+		} else {
+			// Report to the client that the session was present
+			sessp = true
+		}
+		ec := es.c
+		// Is there an actual client associated with this session.
+		if ec != nil {
+			// Spec [MQTT-3.1.4-2]. If the ClientId represents a Client already
+			// connected to the Server then the Server MUST isconnect the existing
+			// client.
+			ec := es.c
+			ec.mu.Lock()
+			// Remove will before closing
+			ec.mqtt.cp.will = nil
+			ec.mu.Unlock()
+			// Close old client in separate go routine
+			go ec.closeConnection(DuplicateClientID)
+		}
+		// Bind with the new client
+		es.c = c
+		es.clean = cleanSess
+	} else {
+		// Spec [MQTT-3.2.2-3]: if the Server does not have stored Session state,
+		// it MUST set Session Present to 0 in the CONNACK packet.
+		sm.sessions[cp.clientID] = &mqttSession{c: c, clean: cleanSess}
+	}
 	c.mu.Lock()
 	c.flags.set(connectReceived)
 	c.mqtt.cp = cp
+	c.mqtt.sessp = sessp
 	rd := c.mqtt.cp.rd
 	c.mu.Unlock()
 	return mqttConnAckRCConnectionAccepted, rd, nil
 }
 
+func (s *Server) mqttClearSession(sess *mqttSession) {
+	// no-op for now
+}
+
 func (c *client) mqttEnqueueConnAck(rc byte) bool {
 	proto := [4]byte{mqttPacketConnectAck, 2, 0, rc}
 	c.mu.Lock()
-	sp := c.mqtt.sessp
-	if sp {
-		proto[2] = 1
+	var sp bool
+	// Spec [MQTT-3.2.2-4]. If return code is different from 0, then
+	// session present flag must be set to 0.
+	if rc == 0 {
+		if sp = c.mqtt.sessp; sp {
+			proto[2] = 1
+		}
 	}
 	c.enqueueProto(proto[:])
 	c.mu.Unlock()

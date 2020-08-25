@@ -2386,7 +2386,11 @@ func (s *Server) removeClient(c *client) {
 		if updateProtoInfoCount {
 			s.cproto--
 		}
+		mqtt := c.mqtt != nil
 		s.mu.Unlock()
+		if mqtt {
+			s.mqttHandleClosedClient(c)
+		}
 	case ROUTER:
 		s.removeRoute(c)
 	case GATEWAY:

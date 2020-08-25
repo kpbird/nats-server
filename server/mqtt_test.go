@@ -2347,6 +2347,53 @@ func TestMQTTPublishRetainPermViolation(t *testing.T) {
 	testMQTTDisconnect(t, mc2, nil)
 }
 
+func TestMQTTCleanSession(t *testing.T) {
+	o := testMQTTDefaultOptions()
+	s := testMQTTRunServer(t, o)
+	defer s.Shutdown()
+
+	ci := &mqttConnInfo{
+		clientID:  "me",
+		cleanSess: false,
+	}
+	c, r := testMQTTConnect(t, ci, o.MQTT.Host, o.MQTT.Port)
+	defer c.Close()
+	testMQTTCheckConnAck(t, r, mqttConnAckRCConnectionAccepted, false)
+	testMQTTDisconnect(t, c, nil)
+
+	c, r = testMQTTConnect(t, ci, o.MQTT.Host, o.MQTT.Port)
+	defer c.Close()
+	testMQTTCheckConnAck(t, r, mqttConnAckRCConnectionAccepted, true)
+	testMQTTDisconnect(t, c, nil)
+
+	ci.cleanSess = true
+	c, r = testMQTTConnect(t, ci, o.MQTT.Host, o.MQTT.Port)
+	defer c.Close()
+	testMQTTCheckConnAck(t, r, mqttConnAckRCConnectionAccepted, false)
+	testMQTTDisconnect(t, c, nil)
+}
+
+func TestMQTTDuplicateClientID(t *testing.T) {
+	o := testMQTTDefaultOptions()
+	s := testMQTTRunServer(t, o)
+	defer s.Shutdown()
+
+	ci := &mqttConnInfo{
+		clientID:  "me",
+		cleanSess: false,
+	}
+	c1, r1 := testMQTTConnect(t, ci, o.MQTT.Host, o.MQTT.Port)
+	defer c1.Close()
+	testMQTTCheckConnAck(t, r1, mqttConnAckRCConnectionAccepted, false)
+
+	c2, r2 := testMQTTConnect(t, ci, o.MQTT.Host, o.MQTT.Port)
+	defer c2.Close()
+	testMQTTCheckConnAck(t, r2, mqttConnAckRCConnectionAccepted, true)
+
+	// The old client should be disconnected.
+	testMQTTExpectDisconnect(t, c1)
+}
+
 // Benchmarks
 
 func mqttBenchPub(b *testing.B, subject, payload string) {
